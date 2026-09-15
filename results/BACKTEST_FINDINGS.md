@@ -114,13 +114,63 @@ Applied as a de-leveraging overlay it cut annualized volatility 14.9% ->
 Sharpe essentially unchanged (8.59 -> 8.49). The overlay does what it
 claims; it is riding on an inflated base strategy.
 
-## Recommended fixes before quoting any performance number
+## Remediation (implemented)
 
-1. Do not derive the trading signal from Kalman innovations. Estimate
-   betas with the KF, then form the residual from an independent
-   hold-out or lagged application of those betas, so the traded series
-   is not the filter's own one-step error.
-2. Calibrate OU on an expanding or rolling window strictly in the past.
-3. Select the tradeable universe on a training window only.
-4. Validate against a null: shuffle the residual signs and confirm the
-   Sharpe collapses toward zero.
+`src/causal_signal.py` rebuilds the signal path as Avellaneda & Lee
+specify it. For each day, betas are fit on a trailing 60-day window that
+ends strictly before that day, residuals are cumulated *within* that
+window to form a bounded spread, OU parameters are calibrated on that
+window alone, and the traded return is the out-of-sample idiosyncratic
+return obtained by applying those past betas to the realized factor
+returns of the scored day.
+
+An intermediate attempt, keeping the Kalman filter but applying its
+betas with a purge gap, was rejected: it replaces one artifact with
+another. Purging flips the mean lag-1 autocorrelation from -0.119 to
++0.098, because stale betas leave a persistent mis-hedge in the residual.
+
+Result of the causal construction:
+
+| Series | Mean lag-1 autocorr |
+|---|---|
+| Raw daily returns | +0.0161 |
+| Kalman innovations (original signal) | -0.1132 |
+| Kalman betas applied with a purge gap (rejected) | +0.0980 |
+| **Causal OOS residuals (implemented)** | **+0.0112** |
+
+The induced autocorrelation is gone; the traded series now behaves like
+the returns it came from.
+
+| Metric | Original | Causal construction |
+|---|---|---|
+| Sharpe ratio | 8.59 | **0.52** |
+| CAGR | 255.7% | 4.1% |
+| Annualized volatility | 14.9% | 8.4% |
+| Max drawdown | -4.3% | -7.0% |
+| Win rate | 74.8% | 45.0% |
+
+## Null test
+
+`src/validation.py` provides `sign_shuffle_null`, which flips the sign of
+each traded return and re-runs the backtest. This preserves volatility
+and tail shape while destroying any genuine signal-to-outcome link.
+
+Over 200 draws: null Sharpe mean **-0.405** (sd 0.711, 95th percentile
++0.713) against an observed **+0.521**, giving z = +1.30 and a one-sided
+empirical **p = 0.110**.
+
+**Conclusion: on this 20-asset universe over 2023-2025, the strategy's
+edge is not statistically significant.** The correct reportable outcome
+is a null result with a well-specified, look-ahead-free pipeline -- not
+the Sharpe of 8.59 the original construction produced.
+
+## Regression guards
+
+`test/test_engine.py` now pins both defects so they cannot return:
+
+* `test_causal_signal_has_no_lookahead` perturbs a future observation
+  and asserts every earlier s-score and residual is bit-identical.
+* `test_causal_signal_does_not_induce_autocorrelation` asserts the
+  construction leaves white-noise input white, within 0.05.
+* `test_sign_shuffle_null_rejects_a_zero_edge_strategy` asserts a
+  no-edge strategy fails the null.

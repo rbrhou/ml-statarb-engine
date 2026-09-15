@@ -121,28 +121,81 @@ $$\text{LR}_{\text{POF}} = -2 \left[ x \ln(\alpha) + (N - x) \ln(1 - \alpha) - x
 
 ## Repository Structure. 
 ```text
-├── data/                                   # Local data cache (Gitignored except .gitkeep)
+├── data/                                   # Local data cache (gitignored except .gitkeep)
 │   └── .gitkeep
 ├── notebooks/                              # 4-Stage Execution Narrative
-│   ├── 01_factor_decomposition.ipynb       # PCA, Parametric UMAP, and DBSCAN Clustering
-│   ├── 02_kf_residuals_verification.ipynb  # Kalman Filter tracking vs OLS + OU Calibration
+│   ├── 01_pca_decomposition.ipynb          # PCA, Parametric UMAP, and DBSCAN Clustering
+│   ├── 02_KF_residuals_verification.ipynb  # Kalman Filter tracking vs OLS + OU Calibration
 │   ├── 03_portfolio_backtest.ipynb         # Multi-Asset Execution & Transaction Cost Friction
 │   └── 04_tcn_var_risk_overlay.ipynb       # PyTorch TCN VaR Forecasting & Kupiec POF Testing
+├── results/
+│   └── BACKTEST_FINDINGS.md                # Measured results and the bias analysis behind them
 ├── src/                                    # Core Modular Engine
-│   ├── backtest.py                         # Portfolio aggregation, inverse-vol weighting, and tearsheets
+│   ├── backtest.py                         # Portfolio aggregation, inverse-vol weighting, tearsheets
+│   ├── causal_signal.py                    # Look-ahead-free s-score and OOS residual construction
 │   ├── clustering.py                       # Parametric UMAP + DBSCAN density clustering
-│   ├── data_loader.py                      # Local Parquet caching and yfinance ingestion
+│   ├── data_loader.py                      # Request-keyed Parquet caching and yfinance ingestion
 │   ├── diagnostics.py                      # ADF stationarity and autocorrelation screening
 │   ├── ou_process.py                       # Ornstein-Uhlenbeck SDE modeling and s-score generation
 │   ├── pca_model.py                        # Eigendecomposition and variance mapping
-│   ├── residuals.py                        # Multi-Factor Kalman Filter State-Space model
-│   └── tcn_var.py                          # PyTorch TCN architecture and Pinball Loss
-├── tests/                                  # Pytest unit testing suite
+│   ├── residuals_KF.py                     # Multi-Factor Kalman Filter State-Space model
+│   ├── residuals_OLS.py                    # Static OLS residual baseline
+│   ├── rolling_engine.py                   # Walk-forward PCA re-estimation
+│   ├── tcn_var.py                          # PyTorch TCN architecture and Pinball Loss
+│   └── validation.py                       # Sign-shuffle null and autocorrelation sanity checks
+├── test/                                   # Pytest unit testing suite
 │   └── test_engine.py
-├── .gitignore                              # Excludes data/, .pt weights, and Jupyter checkpoints
+├── scripts_generate_cache.py               # Populate data/ from yfinance for offline runs
+├── .gitignore                              # Excludes data/, .pt weights, Jupyter checkpoints
 └── requirements.txt                        # Python dependencies
 ```
 
+---
+## Results & Methodological Caveat.
+
+The pipeline as originally written reported a Sharpe ratio of **8.59**
+net of costs over 2023-2025. That number is an artifact, not a result,
+and `results/BACKTEST_FINDINGS.md` documents the analysis in full.
+
+The dominant cause: the strategy traded the cumulative sum of the Kalman
+filter's own one-step innovations. The filter's update step,
+`beta_t = beta_pred + K e_t`, leaves a `-H_{t+1} K e_t` term in the next
+innovation, manufacturing negative autocorrelation in proportion to the
+Kalman gain. Raw daily returns and static OLS residuals both show lag-1
+autocorrelation near +0.016; the innovations showed -0.113. Sweeping the
+process-noise parameter across five orders of magnitude moved the Sharpe
+ratio from 1.93 to 9.03 -- performance tracked a tuning constant rather
+than any market signal. Two further defects, full-sample OU calibration
+and full-sample universe selection, contributed additional look-ahead.
+
+`src/causal_signal.py` rebuilds the signal path along the lines
+Avellaneda & Lee specify: betas fit on a trailing window ending strictly
+before the scored day, residuals cumulated within that window, OU
+calibrated on that window alone, and the traded return formed
+out-of-sample. Under that construction the induced autocorrelation
+disappears (+0.011, in line with the raw returns) and the honest result
+over the same period is:
+
+| Metric | Original | Causal construction |
+|---|---|---|
+| Sharpe ratio | 8.59 | **0.52** |
+| CAGR | 255.7% | 4.1% |
+| Annualized volatility | 14.9% | 8.4% |
+| Max drawdown | -4.3% | -7.0% |
+
+A 200-draw sign-shuffle null gives a mean Sharpe of -0.41 (sd 0.71)
+against the observed 0.52, i.e. z = +1.30 and an empirical p-value of
+**0.110**. On this 20-asset universe over this period, the strategy's
+edge is *not* statistically significant, and the repository reports it
+that way rather than quoting the artifact.
+
+The components that stand independently of this defect are the
+UMAP/DBSCAN sector recovery (notebook 01) and the TCN VaR overlay, whose
+forecasts pass Kupiec unconditional-coverage tests out-of-sample
+(5% VaR: 6.25% realized breach rate, p = 0.558).
+
+---
+## Sources.
 ---
 ## Sources.  
 * **Avellaneda, M., & Lee, J.-H. (2010).** *Statistical arbitrage in the US equities market.* **Quantitative Finance**.
