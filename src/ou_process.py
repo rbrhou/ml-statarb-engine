@@ -17,6 +17,9 @@ class OUProcessModel:
         
         """Fits an AR(1) specification to the cumulative spread to extract
         kappa, theta, sigma, and the equilibrium standard deviation.
+
+        Units: `kappa` is annualized (per year, given dt = 1/252) while
+        `half_life` is expressed in sampling periods, i.e. trading days.
         """
         
         x = np.asarray(spread_series.to_numpy(dtype=float), dtype=float)
@@ -45,7 +48,10 @@ class OUProcessModel:
         var_zeta = np.var(x_curr - (a + b * x_lag), ddof=2)
         sigma = np.sqrt(var_zeta * (-2.0 * np.log(b)) / (self.dt * (1.0 - b**2)))
         sigma_eq = np.sqrt(var_zeta / (1.0 - b**2))
-        half_life = np.log(2.0) / kappa
+        # kappa is annualized (dt = 1/252), so ln(2)/kappa is in YEARS.
+        # Report the half-life in sampling periods (trading days) instead,
+        # which is ln(2) / -ln(b) -- the same quantity divided by dt.
+        half_life = np.log(2.0) / (-np.log(b))
 
         return {
             "kappa": kappa,

@@ -253,14 +253,32 @@ def kupiec_pof_test(
     failures = np.sum(actual_returns < predicted_var)
     failure_rate = failures / N if N > 0 else 0.0
 
-    if failures == 0 or failures == N:
+    # x = 0 and x = N are the boundary cases where the unrestricted
+    # log-likelihood terms x*ln(x/N) and (N-x)*ln(1-x/N) hit 0*ln(0).
+    # Both vanish in the limit, so the statistic is still well defined --
+    # returning LR = 0, p = 1 here would wrongly report perfect coverage
+    # for a model that never breached at all.
+    if failures == 0:
+        lr_stat = -2.0 * N * np.log(1.0 - alpha)
+        p_val = 1.0 - chi2.cdf(lr_stat, df=1)
         return {
             "alpha": alpha,
-            "failures": int(failures),
-            "failure_rate": float(failure_rate),
-            "lr_stat": 0.0,
-            "p_value": 1.0,
-            "model_accepted": True,
+            "failures": 0,
+            "failure_rate": 0.0,
+            "lr_stat": float(lr_stat),
+            "p_value": float(p_val),
+            "model_accepted": bool(p_val > 0.05),
+        }
+    if failures == N:
+        lr_stat = -2.0 * N * np.log(alpha)
+        p_val = 1.0 - chi2.cdf(lr_stat, df=1)
+        return {
+            "alpha": alpha,
+            "failures": int(N),
+            "failure_rate": 1.0,
+            "lr_stat": float(lr_stat),
+            "p_value": float(p_val),
+            "model_accepted": bool(p_val > 0.05),
         }
 
     # Likelihood Ratio: -2 * ln( ( (1-p)^(N-x) * p^x ) / ( (1 - x/N)^(N-x) * (x/N)^x ) )
