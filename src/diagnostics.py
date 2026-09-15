@@ -32,7 +32,14 @@ class SpreadDiagnostics:
                 "critical_values": {},
             }
 
-        result = adfuller(clean_series, autolag="AIC")
+        # statsmodels 0.16 switches adfuller's default return type to an
+        # ADFullerResult object. Pin the plain-tuple form explicitly where
+        # the argument exists, and fall back for versions predating it, so
+        # the unpacking below stays correct across both.
+        try:
+            result = adfuller(clean_series, autolag="AIC", result_object=False)
+        except TypeError:
+            result = adfuller(clean_series, autolag="AIC")
         adf_stat = result[0]
         p_value = result[1]
         critical_values = cast(
