@@ -7,7 +7,7 @@ from src.clustering import FactorClusterer
 from src.diagnostics import SpreadDiagnostics
 from src.ou_process import OUProcessModel
 from src.pca_model import PCAFactorModel
-from src.residuals import KalmanResidualFilter
+from src.residuals_KF import KalmanResidualFilter
 from src.tcn_var import TCNVaRForecaster, PinballLoss
 
 
@@ -19,8 +19,11 @@ def test_pca_dimension_reduction():
 
     assert pca.factor_loadings.shape == (5, 2)
     assert pca.factor_returns.shape == (100, 2)
-    assert np.isclose(pca.explained_variance_ratio.sum(), 1.0) is False
-    assert pca.explained_variance_ratio.sum() > 0
+    # explained_variance_ratio spans the FULL eigenvalue spectrum (all 5
+    # components), so it is normalized to sum to exactly 1.0.
+    assert np.isclose(pca.explained_variance_ratio.sum(), 1.0)
+    # The retained top-2 components must explain a strict subset of it.
+    assert 0 < pca.explained_variance_ratio[:2].sum() < 1.0
 
 
 def test_parametric_umap_clustering():
