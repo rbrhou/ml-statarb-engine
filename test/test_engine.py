@@ -138,3 +138,70 @@ def test_tcn_var_forward_pass_and_loss():
 
     assert loss.item() > 0
     assert not torch.isnan(loss)
+
+
+def test_causal_signal_has_no_lookahead():
+    """The s-score at time t must depend only on data strictly before t.
+
+    Perturbing a future observation must leave every earlier s-score and
+    out-of-sample residual untouched; if it doesn't, the construction is
+    peeking ahead.
+    """
+    from src.causal_signal import CausalSignalEngine
+
+    rng = np.random.default_rng(0)
+    T, N, K = 200, 3, 2
+    idx = pd.date_range("2023-01-02", periods=T, freq="B")
+    factors = pd.DataFrame(rng.normal(0, 0.01, (T, K)), index=idx)
+    returns = pd.DataFrame(rng.normal(0, 0.02, (T, N)), index=idx)
+
+    engine = CausalSignalEngine(lookback=40)
+    s_a, r_a, _ = engine.compute(returns, factors)
+
+    perturbed = returns.copy()
+    perturbed.iloc[150] += 10.0  # a shock far in the future
+    s_b, r_b, _ = engine.compute(perturbed, factors)
+
+    pd.testing.assert_frame_equal(s_a.iloc[:150], s_b.iloc[:150])
+    pd.testing.assert_frame_equal(r_a.iloc[:150], r_b.iloc[:150])
+
+
+def test_causal_signal_does_not_induce_autocorrelation():
+    """Out-of-sample residuals of white-noise returns must stay white noise.
+
+    This is the regression guard for the defect that produced a Sharpe
+    near 9: the Kalman innovations carried roughly -0.11 lag-1
+    autocorrelation that the estimator itself had created.
+    """
+    from src.causal_signal import CausalSignalEngine
+
+    rng = np.random.default_rng(7)
+    T, K = 400, 3
+    idx = pd.date_range("2023-01-02", periods=T, freq="B")
+    factors = pd.DataFrame(rng.normal(0, 0.01, (T, K)), index=idx)
+    betas = rng.normal(0, 1, (K, 4))
+    returns = pd.DataFrame(
+        factors.to_numpy() @ betas + rng.normal(0, 0.015, (T, 4)), index=idx
+    )
+
+    _, oos, _ = CausalSignalEngine(lookback=60).compute(returns, factors)
+    mean_ac = oos.apply(lambda s: s.dropna().autocorr(1)).mean()
+    assert abs(mean_ac) < 0.05, f"construction induced autocorrelation: {mean_ac:.4f}"
+
+
+def test_sign_shuffle_null_rejects_a_zero_edge_strategy():
+    """A strategy with no edge must not clear the null."""
+    from src.validation import sign_shuffle_null
+
+    rng = np.random.default_rng(3)
+    idx = pd.date_range("2023-01-02", periods=300, freq="B")
+    traded = pd.DataFrame(rng.normal(0, 0.01, (300, 4)), index=idx)
+
+    def sharpe(df):
+        r = df.sum(axis=1)
+        return (r.mean() * 252) / (r.std() * np.sqrt(252)) if r.std() > 0 else 0.0
+
+    out = sign_shuffle_null(sharpe, traded, n_draws=60, seed=1)
+    assert out["p_value"] > 0.05
+    assert out["significant"] is False
+    assert out["n_draws"] == 60
